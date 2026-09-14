@@ -1,4 +1,5 @@
 import streamlit as st
+import plotly.graph_objects as go
 
 from storage.sheets import (
     get_spreadsheet,
@@ -15,6 +16,13 @@ from core.calendar_selftest import (
     run_calendar_self_tests,
 )
 
+from core.curve import (
+    BetaGrowthCurve,
+)
+
+from core.curve_selftest import (
+    run_curve_self_tests,
+)
 
 st.set_page_config(
     page_title="Capital Growth App",
@@ -34,13 +42,17 @@ st.caption(
 # TABS
 # =========================================================
 
-tab_infrastructure, tab_calendar = st.tabs(
+(
+    tab_infrastructure,
+    tab_calendar,
+    tab_curve,
+) = st.tabs(
     [
         "Infrastructure",
         "Phase 3.1 · Business Calendar",
+        "Phase 3.2 · Beta Curve",
     ]
 )
-
 
 # =========================================================
 # TAB 1 — INFRASTRUCTURE
@@ -452,3 +464,372 @@ with tab_calendar:
             )
 
             st.exception(exc)
+
+# =========================================================
+# TAB 3 — PHASE 3.2 BETA CURVE
+# =========================================================
+
+with tab_curve:
+
+    st.header(
+        "Phase 3.2 · Continuous Beta Growth Curve"
+    )
+
+    st.write(
+        """
+        This sandbox validates the mathematical shape
+        of the continuous growth curve before money,
+        balances, P&L or actual results are introduced.
+        """
+    )
+
+    st.info(
+        "CDF = accumulated target progress. "
+        "PDF = instantaneous growth velocity."
+    )
+
+    # =====================================================
+    # AUTOMATED TESTS
+    # =====================================================
+
+    st.subheader(
+        "Automated Mathematical Tests"
+    )
+
+    if st.button(
+        "Run Phase 3.2 tests",
+        type="primary",
+        key="run_curve_tests",
+    ):
+
+        test_results = (
+            run_curve_self_tests()
+        )
+
+        passed = sum(
+            result["status"] == "PASS"
+            for result in test_results
+        )
+
+        failed = sum(
+            result["status"] == "FAIL"
+            for result in test_results
+        )
+
+        col1, col2, col3 = st.columns(
+            3
+        )
+
+        col1.metric(
+            "Tests",
+            len(test_results),
+        )
+
+        col2.metric(
+            "Passed",
+            passed,
+        )
+
+        col3.metric(
+            "Failed",
+            failed,
+        )
+
+        if failed == 0:
+
+            st.success(
+                "Phase 3.2 test suite PASSED."
+            )
+
+        else:
+
+            st.error(
+                "Phase 3.2 contains failing tests."
+            )
+
+        for result in test_results:
+
+            if result["status"] == "PASS":
+
+                st.success(
+                    f"PASS · {result['name']}"
+                )
+
+            else:
+
+                st.error(
+                    f"FAIL · {result['name']}"
+                )
+
+                st.code(
+                    result["details"]
+                )
+
+    # =====================================================
+    # INTERACTIVE CURVE SANDBOX
+    # =====================================================
+
+    st.divider()
+
+    st.subheader(
+        "Interactive Curve Sandbox"
+    )
+
+    st.caption(
+        "Nothing in this sandbox is saved to Google Sheets."
+    )
+
+    col_peak, col_intensity = (
+        st.columns(2)
+    )
+
+    with col_peak:
+
+        peak_position = st.slider(
+            "Peak Position",
+            min_value=0.05,
+            max_value=0.95,
+            value=0.55,
+            step=0.01,
+            format="%.2f",
+            help=(
+                "Approximate position in the plan "
+                "where maximum growth velocity occurs."
+            ),
+        )
+
+    with col_intensity:
+
+        curve_intensity = st.slider(
+            "Curve Intensity",
+            min_value=0.0,
+            max_value=30.0,
+            value=8.0,
+            step=0.5,
+            format="%.1f",
+            help=(
+                "Controls how concentrated growth is "
+                "around the Peak Position. "
+                "Zero produces a linear curve."
+            ),
+        )
+
+    curve = BetaGrowthCurve(
+        peak_position=peak_position,
+        curve_intensity=curve_intensity,
+    )
+
+    # =====================================================
+    # CURVE PARAMETERS
+    # =====================================================
+
+    metric1, metric2, metric3 = (
+        st.columns(3)
+    )
+
+    metric1.metric(
+        "Alpha",
+        f"{curve.alpha:.4f}",
+    )
+
+    metric2.metric(
+        "Beta",
+        f"{curve.beta:.4f}",
+    )
+
+    if curve.is_linear:
+
+        peak_display = "No unique peak"
+
+    else:
+
+        peak_display = (
+            f"{curve.theoretical_peak_position():.0%}"
+        )
+
+    metric3.metric(
+        "Growth Peak",
+        peak_display,
+    )
+
+    # =====================================================
+    # SAMPLE CURVE
+    # =====================================================
+
+    samples = curve.sample(
+        points=301
+    )
+
+    x_values = [
+        row["x"]
+        for row in samples
+    ]
+
+    cdf_values = [
+        row["cdf"]
+        for row in samples
+    ]
+
+    pdf_values = [
+        row["pdf"]
+        for row in samples
+    ]
+
+    # =====================================================
+    # CDF CHART
+    # =====================================================
+
+    st.subheader(
+        "Accumulated Growth — F(x)"
+    )
+
+    fig_cdf = go.Figure()
+
+    fig_cdf.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=cdf_values,
+            mode="lines",
+            name="Beta CDF",
+        )
+    )
+
+    fig_cdf.add_vline(
+        x=peak_position,
+        line_dash="dash",
+        annotation_text="Peak Position",
+        annotation_position="top",
+    )
+
+    fig_cdf.update_layout(
+        xaxis_title="Business-Time Position",
+        yaxis_title="Accumulated Progress",
+        yaxis=dict(
+            range=[0, 1]
+        ),
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(
+        fig_cdf,
+        use_container_width=True,
+    )
+
+    # =====================================================
+    # PDF CHART
+    # =====================================================
+
+    st.subheader(
+        "Growth Velocity — F'(x)"
+    )
+
+    fig_pdf = go.Figure()
+
+    fig_pdf.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=pdf_values,
+            mode="lines",
+            name="Beta PDF",
+        )
+    )
+
+    fig_pdf.add_vline(
+        x=peak_position,
+        line_dash="dash",
+        annotation_text="Maximum growth",
+        annotation_position="top",
+    )
+
+    fig_pdf.update_layout(
+        xaxis_title="Business-Time Position",
+        yaxis_title="Relative Growth Velocity",
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(
+        fig_pdf,
+        use_container_width=True,
+    )
+
+    # =====================================================
+    # CHECKPOINT TABLE
+    # =====================================================
+
+    st.subheader(
+        "Curve Checkpoints"
+    )
+
+    checkpoint_positions = sorted(
+        set(
+            [
+                0.00,
+                0.10,
+                0.25,
+                0.50,
+                peak_position,
+                0.75,
+                0.90,
+                1.00,
+            ]
+        )
+    )
+
+    checkpoint_rows = []
+
+    for x in checkpoint_positions:
+
+        checkpoint_rows.append({
+            "Position": x,
+            "Plan %": f"{x:.1%}",
+            "Accumulated Progress": (
+                curve.cdf(x)
+            ),
+            "Accumulated %": (
+                f"{curve.cdf(x):.2%}"
+            ),
+            "Growth Velocity": (
+                curve.pdf(x)
+            ),
+        })
+
+    st.dataframe(
+        checkpoint_rows,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # =====================================================
+    # INTERPRETATION
+    # =====================================================
+
+    st.divider()
+
+    if curve.is_linear:
+
+        st.info(
+            "Intensity = 0. The model is currently linear: "
+            "50% of business time corresponds to exactly "
+            "50% of accumulated target progress."
+        )
+
+    else:
+
+        progress_at_peak = curve.cdf(
+            peak_position
+        )
+
+        st.write(
+            f"""
+            **Interpretation**
+
+            Maximum growth velocity occurs at approximately
+            **{peak_position:.0%} of the operational horizon**.
+
+            At that point, the model has already completed
+            approximately **{progress_at_peak:.2%} of total
+            accumulated growth**.
+            """
+        )
+
+ad
