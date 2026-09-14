@@ -1,319 +1,188 @@
-import json
-import uuid
-from datetime import datetime, timezone
-
-import gspread
 import streamlit as st
-from google.oauth2.service_account import Credentials
 
+from storage.sheets import (
+    get_spreadsheet,
+    initialize_schema,
+    validate_schema,
+)
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
-
-
-@st.cache_resource
-def get_google_client():
-
-    credentials_dict = json.loads(
-        st.secrets["GOOGLE_CREDENTIALS"]
-    )
-
-    credentials = Credentials.from_service_account_info(
-        credentials_dict,
-        scopes=SCOPES,
-    )
-
-    return gspread.authorize(credentials)
-
-
-@st.cache_resource
-def get_spreadsheet():
-
-    client = get_google_client()
-
-    spreadsheet_id = st.secrets["SPREADSHEET_ID"]
-
-    return client.open_by_key(spreadsheet_id)
-
-
-
-
-
-
-
-# ---------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------
 
 st.set_page_config(
-    page_title="Capital Growth App - Connectivity Test",
-    page_icon="🧪",
+    page_title="Capital Growth App",
+    page_icon="📈",
     layout="centered",
 )
 
-REQUIRED_WORKSHEETS = [
-    "App_Config",
-    "Plan_Versions",
-    "Actual_Events",
-    "Forecast_Revisions",
-]
 
-TEST_WORKSHEET = "Karim_FXCM"
+st.title("📈 Capital Growth App")
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+st.caption("Infrastructure & Schema Setup")
 
 
 # ---------------------------------------------------------
 # GOOGLE SHEETS CONNECTION
 # ---------------------------------------------------------
 
-@st.cache_resource
-def get_google_client():
-    service_account_info = dict(
-        st.secrets["google_service_account"]
-    )
-
-    # Makes the private key robust whether it contains
-    # actual line breaks or escaped \n characters.
-    service_account_info["private_key"] = (
-        service_account_info["private_key"]
-        .replace("\\n", "\n")
-    )
-
-    credentials = Credentials.from_service_account_info(
-        service_account_info,
-        scopes=SCOPES,
-    )
-
-    return gspread.authorize(credentials)
-
-
-@st.cache_resource
-def get_spreadsheet():
-    client = get_google_client()
-
-    spreadsheet_id = st.secrets["app"]["spreadsheet_id"]
-
-    return client.open_by_key(spreadsheet_id)
-
-
-# ---------------------------------------------------------
-# UI
-# ---------------------------------------------------------
-
-st.title("🧪 Capital Growth App")
-st.subheader("Google Sheets Connectivity Test")
-
-st.caption(
-    "Temporary smoke test for Streamlit Cloud → "
-    "Secrets → Google Service Account → Google Sheets."
-)
-
-
-# ---------------------------------------------------------
-# 1. CONNECTION TEST
-# ---------------------------------------------------------
-
 try:
+
     spreadsheet = get_spreadsheet()
 
     st.success(
-        f"Connected successfully to Google Sheet: "
-        f"**{spreadsheet.title}**"
+        f"Google Sheets connected: **{spreadsheet.title}**"
     )
 
 except Exception as exc:
-    st.error("Could not connect to Google Sheets.")
+
+    st.error("Google Sheets connection failed.")
+
     st.exception(exc)
+
     st.stop()
 
 
 # ---------------------------------------------------------
-# 2. SCHEMA / WORKSHEET TEST
-# ---------------------------------------------------------
-
-worksheet_names = [
-    worksheet.title
-    for worksheet in spreadsheet.worksheets()
-]
-
-missing_worksheets = [
-    sheet
-    for sheet in REQUIRED_WORKSHEETS
-    if sheet not in worksheet_names
-]
-
-if missing_worksheets:
-    st.error(
-        "Missing required worksheets: "
-        + ", ".join(missing_worksheets)
-    )
-
-else:
-    st.success("All four required worksheets were found.")
-
-    st.write(REQUIRED_WORKSHEETS)
-
-
-# ---------------------------------------------------------
-# 3. WRITE / READ / DELETE TEST
+# SCHEMA VALIDATION
 # ---------------------------------------------------------
 
 st.divider()
 
-st.subheader("Write test")
+st.subheader("Backend Schema")
 
-st.write(
-    "This test creates a temporary worksheet, writes data, "
-    "reads it back, verifies it, and deletes the worksheet."
-)
+schema_results = validate_schema()
 
 
-if st.button(
-    "Run write/read test",
-    type="primary",
-):
-
-    test_worksheet = None
-
-    try:
-
-        # -------------------------------------------------
-        # Remove leftover test tab from an interrupted test
-        # -------------------------------------------------
-
-        try:
-            old_test_sheet = spreadsheet.worksheet(
-                TEST_WORKSHEET
-            )
-
-            spreadsheet.del_worksheet(old_test_sheet)
-
-        except gspread.WorksheetNotFound:
-            pass
+all_valid = True
 
 
-        # -------------------------------------------------
-        # Create temporary worksheet
-        # -------------------------------------------------
+for sheet_name, result in schema_results.items():
 
-        test_worksheet = spreadsheet.add_worksheet(
-            title=TEST_WORKSHEET,
-            rows=10,
-            cols=5,
-        )
+    status = result["status"]
 
-
-        # -------------------------------------------------
-        # Test payload
-        # -------------------------------------------------
-
-        test_id = str(uuid.uuid4())
-
-        timestamp = datetime.now(
-            timezone.utc
-        ).isoformat()
-
-
-        values = [
-            ["field", "value"],
-            ["test_id", test_id],
-            ["timestamp_utc", timestamp],
-            ["status", "WRITE_OK"],
-        ]
-
-
-        # -------------------------------------------------
-        # WRITE
-        # -------------------------------------------------
-
-        test_worksheet.update(
-            range_name="A1:B4",
-            values=values,
-            value_input_option="RAW",
-        )
-
-
-        # -------------------------------------------------
-        # READ
-        # -------------------------------------------------
-
-        readback = test_worksheet.get("A1:B4")
-
-
-        # -------------------------------------------------
-        # VERIFY
-        # -------------------------------------------------
-
-        returned_test_id = readback[1][1]
-
-        if returned_test_id != test_id:
-            raise ValueError(
-                "Read/write validation failed: "
-                "test ID does not match."
-            )
-
-
-        # -------------------------------------------------
-        # DELETE TEMP WORKSHEET
-        # -------------------------------------------------
-
-        spreadsheet.del_worksheet(
-            test_worksheet
-        )
-
-        test_worksheet = None
-
-
-        # -------------------------------------------------
-        # SUCCESS
-        # -------------------------------------------------
+    if status == "VALID":
 
         st.success(
-            "Full connectivity test passed successfully."
+            f"{sheet_name}: VALID"
         )
 
-        st.code(
-            f"""
-Connection: PASS
-Secrets: PASS
-Spreadsheet access: PASS
-Required tabs: PASS
-Write: PASS
-Read: PASS
-Validation: PASS
-Delete: PASS
+    elif status == "EMPTY":
 
-Test ID:
-{test_id}
-            """
+        st.warning(
+            f"{sheet_name}: EMPTY"
         )
 
+        all_valid = False
 
-    except Exception as exc:
+    elif status == "MISSING_SHEET":
 
         st.error(
-            "Connectivity test failed."
+            f"{sheet_name}: MISSING"
         )
 
-        st.exception(exc)
+        all_valid = False
+
+    elif status == "SCHEMA_MISMATCH":
+
+        st.error(
+            f"{sheet_name}: SCHEMA MISMATCH"
+        )
+
+        all_valid = False
+
+        with st.expander(
+            f"Show schema difference — {sheet_name}"
+        ):
+
+            st.write("Expected:")
+
+            st.code(
+                " | ".join(result["expected"])
+            )
+
+            st.write("Actual:")
+
+            st.code(
+                " | ".join(result["actual"])
+            )
 
 
-        # Try to clean up the temporary worksheet
-        if test_worksheet is not None:
+# ---------------------------------------------------------
+# INITIALIZATION
+# ---------------------------------------------------------
 
-            try:
-                spreadsheet.del_worksheet(
-                    test_worksheet
+if not all_valid:
+
+    st.divider()
+
+    st.subheader("Initialize Backend")
+
+    st.info(
+        "Initialization writes headers only to empty worksheets. "
+        "Existing mismatched data will never be overwritten."
+    )
+
+    if st.button(
+        "Initialize schema",
+        type="primary",
+    ):
+
+        init_results = initialize_schema()
+
+        for sheet_name, result in init_results.items():
+
+            status = result["status"]
+
+            if status == "INITIALIZED":
+
+                st.success(
+                    f"{sheet_name}: initialized"
                 )
 
-            except Exception:
-                st.warning(
-                    "The temporary test worksheet "
-                    "could not be deleted automatically."
+            elif status == "ALREADY_VALID":
+
+                st.info(
+                    f"{sheet_name}: already valid"
                 )
+
+            else:
+
+                st.error(
+                    f"{sheet_name}: {status}"
+                )
+
+                if "message" in result:
+
+                    st.write(
+                        result["message"]
+                    )
+
+        st.cache_resource.clear()
+
+        st.rerun()
+
+
+# ---------------------------------------------------------
+# READY
+# ---------------------------------------------------------
+
+else:
+
+    st.divider()
+
+    st.success(
+        "Backend schema is fully valid."
+    )
+
+    st.code(
+        """
+Google Sheets connection: PASS
+Service Account: PASS
+Secrets: PASS
+
+App_Config: PASS
+Plan_Versions: PASS
+Actual_Events: PASS
+Forecast_Revisions: PASS
+
+Backend Status: READY
+        """
+    )
